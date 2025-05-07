@@ -62,6 +62,7 @@ const v = (x: number | Vector3, y?: number, z?: number): Vector3 =>
 
 const setVelocity = (api: PublicApi, dir: Vector3, speed: number): void => {
   const vel = dir.clone().setLength(speed);
+  api.wakeUp(); // ensure body is active
   api.velocity.set(vel.x, vel.y, vel.z);
 };
 
