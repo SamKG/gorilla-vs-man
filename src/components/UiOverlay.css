@@ -1,0 +1,67 @@
+/* src/components/UiOverlay.css */
+
+/* ----------------------------------
+   Overlay container
+---------------------------------- */
+.overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    padding: 24px 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+
+    /* Let clicks pass through everywhere except the controls */
+    pointer-events: none;
+
+    /* Subtle glass-like backdrop */
+    background: rgba(255, 255, 255, 0.02);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+}
+
+/* ----------------------------------
+   Controls
+---------------------------------- */
+.controls {
+    display: flex;
+    gap: 12px;
+    pointer-events: auto; /* re-enable clicks for buttons */
+}
+
+.controls button {
+    padding: 6px 14px;
+    font-size: 1rem;
+    font-weight: 600;
+    border: none;
+    border-radius: 6px;
+    background: #2d8cf0;
+    color: #fff;
+    cursor: pointer;
+    transition:
+        transform 0.1s ease,
+        opacity 0.15s ease;
+}
+
+.controls button:hover {
+    transform: translateY(-1px);
+}
+
+.controls button:active {
+    transform: translateY(0);
+    opacity: 0.85;
+}
+
+/* ----------------------------------
+   Winner banner
+---------------------------------- */
+.winner {
+    margin-top: 8px;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #222;
+    pointer-events: none;
+}
