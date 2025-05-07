@@ -1,9 +1,13 @@
-/* src/engine3d/Ragdolls.tsx */
+/* ──────────────────────────────────────────────────────────────
+   src/engine3d/Ragdolls.tsx
+   – Sliding-torso hit-box + floppy, collidable arms
+   – Uses @react-three/cannon’s PublicApi type
+   ──────────────────────────────────────────────────────────── */
 
 import {
   useBox,
-  useSphere,
   usePointToPointConstraint,
+  type PublicApi, // ← correct type
 } from "@react-three/cannon";
 import {
   forwardRef,
@@ -12,9 +16,9 @@ import {
   type ForwardedRef,
 } from "react";
 import { Vector3 } from "three";
+import { useFrame } from "@react-three/fiber";
 
-/* ─────────────────────────── types ─────────────────────────── */
-
+/* ───────────────- shared types ─────────────── */
 export type UnitKind = "Man" | "Gorilla";
 
 export interface RagdollHandle {
@@ -26,12 +30,11 @@ export interface RagdollHandle {
   takeDamage(dmg: number): void;
 }
 
-/* ─────────────────── balance / geometry ────────────────────── */
-
+/* ───────────────- balance & geometry ─────────────── */
 type BalanceEntry = {
   color: number;
   stats: { maxHp: number; range: number; damage: number };
-  geom: { torso: Vector3; head: number; limb: Vector3 };
+  geom: { torso: Vector3; arm: Vector3 };
 };
 
 const BALANCE: Record<UnitKind, BalanceEntry> = {
@@ -39,96 +42,86 @@ const BALANCE: Record<UnitKind, BalanceEntry> = {
     color: 0x3279ff,
     stats: { maxHp: 120, range: 4, damage: 16 },
     geom: {
-      torso: new Vector3(0.6, 1.2, 0.4),
-      head: 0.33,
-      limb: new Vector3(0.25, 0.8, 0.25),
+      torso: new Vector3(0.8, 1.6, 0.5),
+      arm: new Vector3(0.25, 0.9, 0.25),
     },
   },
   Gorilla: {
     color: 0x2b2b2b,
     stats: { maxHp: 220, range: 3.2, damage: 26 },
     geom: {
-      torso: new Vector3(0.9, 1.1, 0.6),
-      head: 0.42,
-      limb: new Vector3(0.35, 0.95, 0.35),
+      torso: new Vector3(1.1, 1.4, 0.7),
+      arm: new Vector3(0.35, 1.1, 0.35),
     },
   },
 } as const;
 
-/* ─────────────────────── utilities ─────────────────────────── */
-
+/* helpers */
 const v = (x: number | Vector3, y?: number, z?: number): Vector3 =>
   x instanceof Vector3 ? x.clone() : new Vector3(x, y!, z!);
 
-const setVelocity = (api: any, dir: Vector3, speed: number): void => {
+const setVelocity = (api: PublicApi, dir: Vector3, speed: number): void => {
   const vel = dir.clone().setLength(speed);
   api.velocity.set(vel.x, vel.y, vel.z);
 };
 
-/* ─────────────────── internal component ────────────────────── */
-
+/* ───────────────- internal builder ─────────────── */
 type BuildProps = { position: [number, number, number]; kind: UnitKind };
 
 function InternalRagdoll(
   { position, kind }: BuildProps,
   ref: ForwardedRef<RagdollHandle>,
 ) {
+  /* config */
   const cfg = BALANCE[kind];
-  const { torso, head, limb } = cfg.geom;
+  const { torso, arm } = cfg.geom;
   const { maxHp } = cfg.stats;
 
-  /* physics bodies */
+  /* torso – single sliding box */
   const [torsoRef, torsoApi] = useBox(
-    () => ({ args: torso.toArray(), mass: 8, position }),
-    undefined,
-    [position],
-  );
-
-  const [headRef] = useSphere(
     () => ({
-      args: [head],
-      mass: 2,
-      position: [position[0], position[1] + torso.y / 2 + head, position[2]],
+      args: torso.toArray(),
+      mass: 10,
+      fixedRotation: true,
+      position,
     }),
     undefined,
     [position],
   );
 
-  const limbOffsets = [
-    v(-0.45, 0.55, 0),
-    v(0.45, 0.55, 0),
-    v(-0.25, -0.6, 0),
-    v(0.25, -0.6, 0),
+  /* two loose arms */
+  const armOffsets = [
+    v(-torso.x / 2, torso.y / 4, 0),
+    v(torso.x / 2, torso.y / 4, 0),
   ];
-  const limbs = limbOffsets.map(
-    (off) =>
-      useBox(
-        () => ({
-          args: limb.toArray(),
-          mass: 2.5,
-          position: [
-            position[0] + off.x,
-            position[1] + off.y,
-            position[2] + off.z,
-          ],
-        }),
-        undefined,
-        [position],
-      )[0],
+  const arms: { ref: any; api: PublicApi }[] = armOffsets.map((off) => {
+    const [ref, api] = useBox(
+      () => ({
+        args: arm.toArray(),
+        mass: 2,
+        position: [
+          position[0] + off.x,
+          position[1] + off.y,
+          position[2] + off.z,
+        ],
+        linearDamping: 0,
+        angularDamping: 0,
+      }),
+      undefined,
+      [position],
+    );
+    return { ref, api };
+  });
+
+  /* attach arms with point constraints */
+  arms.forEach(({ ref }, i) =>
+    usePointToPointConstraint(torsoRef, ref, {
+      pivotA: armOffsets[i].toArray(),
+      pivotB: [0, 0, 0],
+    }),
   );
 
-  const connect = (a: any, b: any, pivot: Vector3) =>
-    usePointToPointConstraint(a, b, {
-      pivotA: pivot.toArray(),
-      pivotB: [0, 0, 0],
-    });
-  connect(torsoRef, headRef, v(0, torso.y / 2, 0));
-  connect(torsoRef, limbs[0], v(-0.45, 0.3, 0));
-  connect(torsoRef, limbs[1], v(0.45, 0.3, 0));
-  connect(torsoRef, limbs[2], v(-0.25, -torso.y / 2, 0));
-  connect(torsoRef, limbs[3], v(0.25, -torso.y / 2, 0));
-
-  /* imperative API */
+  /* imperative handle */
   const hp = useRef(maxHp);
   useImperativeHandle(
     ref,
@@ -141,6 +134,7 @@ function InternalRagdoll(
         const dir = target.clone().sub(v(torsoRef.current!.position)).setY(0);
         if (dir.lengthSq() > 1e-4)
           setVelocity(torsoApi, dir.normalize(), speed);
+        else torsoApi.velocity.set(0, 0, 0);
       },
       takeDamage: (dmg) => {
         hp.current = Math.max(0, hp.current - dmg);
@@ -148,6 +142,21 @@ function InternalRagdoll(
     }),
     [],
   );
+
+  /* arm “spaz” driver */
+  useFrame(() => {
+    const jolt = 0.08;
+    arms.forEach(({ api }) =>
+      api.applyImpulse(
+        [
+          (Math.random() - 0.5) * jolt,
+          (Math.random() - 0.5) * jolt,
+          (Math.random() - 0.5) * jolt,
+        ],
+        [0, 0, 0],
+      ),
+    );
+  });
 
   /* visuals */
   const color = cfg.color;
@@ -157,13 +166,9 @@ function InternalRagdoll(
         <boxGeometry args={torso.toArray()} />
         <meshStandardMaterial color={color} />
       </mesh>
-      <mesh ref={headRef} castShadow receiveShadow>
-        <sphereGeometry args={[head, 16, 16]} />
-        <meshStandardMaterial color={color} />
-      </mesh>
-      {limbs.map((lr, i) => (
-        <mesh key={i} ref={lr} castShadow receiveShadow>
-          <boxGeometry args={limb.toArray()} />
+      {arms.map(({ ref }, i) => (
+        <mesh key={i} ref={ref} castShadow receiveShadow>
+          <boxGeometry args={arm.toArray()} />
           <meshStandardMaterial color={color} />
         </mesh>
       ))}
@@ -173,8 +178,7 @@ function InternalRagdoll(
 
 const ForwardInternal = forwardRef<RagdollHandle, BuildProps>(InternalRagdoll);
 
-/* ─────────────────────── public wrappers ────────────────────── */
-
+/* wrappers */
 export const ManRagdoll = forwardRef<
   RagdollHandle,
   { position: [number, number, number] }
