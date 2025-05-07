@@ -6,30 +6,32 @@ import { Vector3 } from "three";
 import UiOverlay from "./components/UiOverlay";
 import "./index.css";
 
-/** How many gorillas to spawn (100 feels good on modern GPUs) */
-const GORILLA_COUNT = 100;
+/* balance knobs */
+const MEN = 100;
+const GORILLA_POS = new Vector3(-6, 4, 0);
 
 export default function App3D() {
   const [winner, setWinner] = useState<"Man" | "Gorillas" | null>(null);
-  const resetFlag = useRef(0); // bump to force React to rerender ragdolls
+  const [active, setActive] = useState(false); // drives AI loop
+  const resetNonce = useRef(0); // forces ragdoll re-mount
 
-  // positions for initial spawn
-  const spawnPositions = useMemo(() => {
-    const positions: Vector3[] = [];
-    const center = new Vector3(6, 0, 0);
+  /* spawn ring of men around +x axis */
+  const menPositions = useMemo(() => {
+    const out: Vector3[] = [];
+    const centre = new Vector3(6, 0, 0);
     const radius = 7;
-    for (let i = 0; i < GORILLA_COUNT; i++) {
-      const angle = (Math.PI * 2 * i) / GORILLA_COUNT;
+    for (let i = 0; i < MEN; i++) {
+      const theta = (Math.PI * 2 * i) / MEN;
       const r = radius * (0.6 + 0.4 * Math.random());
-      positions.push(
+      out.push(
         new Vector3(
-          center.x + Math.cos(angle) * r,
-          0,
-          center.z + Math.sin(angle) * r,
+          centre.x + Math.cos(theta) * r,
+          4,
+          centre.z + Math.sin(theta) * r,
         ),
       );
     }
-    return positions;
+    return out;
   }, []);
 
   return (
@@ -46,9 +48,15 @@ export default function App3D() {
         <Physics gravity={[0, -25, 0]} allowSleep>
           <Suspense fallback={null}>
             <SceneController
-              key={resetFlag.current /* resets ragdolls */}
-              gorillaPositions={spawnPositions}
-              onWin={(w) => setWinner(w)}
+              /* resetting key wipes the whole scene clean */
+              key={resetNonce.current}
+              men={menPositions}
+              gorillaPos={GORILLA_POS}
+              active={active}
+              onWin={(w) => {
+                setWinner(w);
+                setActive(false);
+              }}
             />
           </Suspense>
         </Physics>
@@ -56,10 +64,15 @@ export default function App3D() {
 
       <UiOverlay
         winner={winner}
-        onStart={() => (resetFlag.current += 1)}
+        onStart={() => {
+          /* user may smash “Start” repeatedly – no harm */
+          setActive(true);
+        }}
         onReset={() => {
           setWinner(null);
-          resetFlag.current += 1;
+          setActive(false);
+          /* bump key so React remounts fresh ragdolls */
+          resetNonce.current += 1;
         }}
       />
     </>

@@ -1,67 +1,99 @@
-// src/components/SceneController.tsx
+/**
+ * Game-logic glue: spawns 100 men vs 1 gorilla, runs very simple melee AI,
+ * determines victory, tells parent when someone wins.
+ */
+
+import { useEffect, useMemo, useRef } from "react";
+import { Vector3 } from "three";
 import {
   ManRagdoll,
   GorillaRagdoll,
-  type RagdollHandle, // type-only import
+  type RagdollHandle,
+  UNIT_BALANCE,
 } from "../engine3d/Ragdolls";
 import { Ground } from "../engine3d/Ground";
-import { useEffect, useMemo, useRef } from "react";
-import { Vector3 } from "three";
 
 interface Props {
-  gorillaPositions: Vector3[];
+  men: Vector3[];
+  gorillaPos: Vector3;
+  active: boolean;
   onWin: (w: "Man" | "Gorillas") => void;
 }
 
-export default function SceneController({ gorillaPositions, onWin }: Props) {
-  /** Reference to every ragdoll so we can poll death state */
+export default function SceneController({
+  men,
+  gorillaPos,
+  active,
+  onWin,
+}: Props) {
   const ragdolls = useRef<RagdollHandle[]>([]);
 
-  /* ─────────────────────  BUILD CHILDREN ONCE  ───────────────────── */
+  /* spawn once ------------------------------------------------------- */
   const children = useMemo(() => {
     const locals: RagdollHandle[] = [];
+    const push = (h: RagdollHandle | null): void => {
+      if (h) locals.push(h);
+    };
 
-    // lone hero
     const els = [
-      <ManRagdoll
-        key="man"
-        position={[-6, 4, 0]}
-        ref={(h: RagdollHandle | null): void => {
-          if (h) locals.push(h);
-        }}
-      />,
-      // gorilla horde
-      ...gorillaPositions.map((pos, i) => (
-        <GorillaRagdoll
-          key={`g${i}`}
-          position={[pos.x, 4, pos.z]}
-          ref={(h: RagdollHandle | null): void => {
-            if (h) locals.push(h);
-          }}
-        />
+      <GorillaRagdoll key="g" position={gorillaPos.toArray()} ref={push} />,
+      ...men.map((p, i) => (
+        <ManRagdoll key={i} position={p.toArray()} ref={push} />
       )),
     ];
-
     ragdolls.current = locals;
     return els;
-  }, [gorillaPositions]);
+  }, [men, gorillaPos]);
 
-  /* ─────────────────────  VICTORY POLL  ───────────────────── */
+  /* AI + victory loop ------------------------------------------------ */
   useEffect(() => {
+    if (!active) return;
+
     const id = setInterval(() => {
-      const menAlive = ragdolls.current.some(
-        (d) => d.type === "Man" && !d.dead,
-      );
-      const gorillasAlive = ragdolls.current.some(
-        (d) => d.type === "Gorilla" && !d.dead,
-      );
-      if (!menAlive || !gorillasAlive) {
+      const living = ragdolls.current.filter((d) => !d.dead());
+
+      const menAlive = living.some((d) => d.kind === "Man");
+      const gorAlive = living.some((d) => d.kind === "Gorilla");
+      if (!menAlive || !gorAlive) {
         onWin(menAlive ? "Man" : "Gorillas");
         clearInterval(id);
+        return;
       }
-    }, 400);
+
+      const now = performance.now() / 1000;
+
+      for (const a of living) {
+        /* nearest enemy */
+        let nearest: RagdollHandle | null = null;
+        let best = Infinity;
+        for (const b of living) {
+          if (b.kind === a.kind) continue;
+          const d2 = a.position().distanceToSquared(b.position());
+          if (d2 < best) {
+            best = d2;
+            nearest = b;
+          }
+        }
+        if (!nearest) continue;
+
+        const { range, damage } = UNIT_BALANCE[a.kind].stats;
+
+        if (best <= range * range) {
+          /* attack with 0.6 s cooldown */
+          const last = attackMemo.get(a) ?? 0;
+          if (now - last >= 0.6) {
+            nearest.takeDamage(damage);
+            attackMemo.set(a, now);
+          }
+          a.moveToward(a.position(), 0); // stop
+        } else {
+          a.moveToward(nearest.position(), a.kind === "Man" ? 6 : 4.2);
+        }
+      }
+    }, 80);
+
     return () => clearInterval(id);
-  }, [onWin]);
+  }, [active, onWin]);
 
   return (
     <>
@@ -70,3 +102,5 @@ export default function SceneController({ gorillaPositions, onWin }: Props) {
     </>
   );
 }
+
+const attackMemo = new WeakMap<RagdollHandle, number>();

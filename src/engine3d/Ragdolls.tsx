@@ -1,116 +1,169 @@
+/* src/engine3d/Ragdolls.tsx */
+
 import {
   useBox,
   useSphere,
   usePointToPointConstraint,
 } from "@react-three/cannon";
-import { forwardRef, useImperativeHandle } from "react";
+import {
+  forwardRef,
+  useImperativeHandle,
+  useRef,
+  type ForwardedRef,
+} from "react";
 import { Vector3 } from "three";
 
-/* ————————  PUBLIC HANDLE  ———————— */
+/* ─────────────────────────── types ─────────────────────────── */
+
+export type UnitKind = "Man" | "Gorilla";
+
 export interface RagdollHandle {
-  type: "Man" | "Gorilla";
-  dead: boolean;
+  readonly kind: UnitKind;
+  hp(): number;
+  dead(): boolean;
+  position(): Vector3;
+  moveToward(target: Vector3, speed: number): void;
+  takeDamage(dmg: number): void;
 }
 
-/* ————————  INTERNAL SHARED BUILDER  ———————— */
-type RagdollProps = {
-  position: [number, number, number];
+/* ─────────────────── balance / geometry ────────────────────── */
+
+type BalanceEntry = {
+  color: number;
+  stats: { maxHp: number; range: number; damage: number };
+  geom: { torso: Vector3; head: number; limb: Vector3 };
 };
 
-function buildRagdoll(
-  type: "Man" | "Gorilla",
-  props: RagdollProps,
-  ref: React.Ref<RagdollHandle>,
+const BALANCE: Record<UnitKind, BalanceEntry> = {
+  Man: {
+    color: 0x3279ff,
+    stats: { maxHp: 120, range: 4, damage: 16 },
+    geom: {
+      torso: new Vector3(0.6, 1.2, 0.4),
+      head: 0.33,
+      limb: new Vector3(0.25, 0.8, 0.25),
+    },
+  },
+  Gorilla: {
+    color: 0x2b2b2b,
+    stats: { maxHp: 220, range: 3.2, damage: 26 },
+    geom: {
+      torso: new Vector3(0.9, 1.1, 0.6),
+      head: 0.42,
+      limb: new Vector3(0.35, 0.95, 0.35),
+    },
+  },
+} as const;
+
+/* ─────────────────────── utilities ─────────────────────────── */
+
+const v = (x: number | Vector3, y?: number, z?: number): Vector3 =>
+  x instanceof Vector3 ? x.clone() : new Vector3(x, y!, z!);
+
+const setVelocity = (api: any, dir: Vector3, speed: number): void => {
+  const vel = dir.clone().setLength(speed);
+  api.velocity.set(vel.x, vel.y, vel.z);
+};
+
+/* ─────────────────── internal component ────────────────────── */
+
+type BuildProps = { position: [number, number, number]; kind: UnitKind };
+
+function InternalRagdoll(
+  { position, kind }: BuildProps,
+  ref: ForwardedRef<RagdollHandle>,
 ) {
-  /* ── rigid-body parts ─────────────────────────────────────────── */
-  const [torso] = useBox(
-    () => ({
-      args: [0.6, 1.2, 0.4],
-      mass: 8,
-      position: props.position,
-    }),
+  const cfg = BALANCE[kind];
+  const { torso, head, limb } = cfg.geom;
+  const { maxHp } = cfg.stats;
+
+  /* physics bodies */
+  const [torsoRef, torsoApi] = useBox(
+    () => ({ args: torso.toArray(), mass: 8, position }),
     undefined,
-    [props.position],
+    [position],
   );
 
-  const [head] = useSphere(
+  const [headRef] = useSphere(
     () => ({
-      args: [0.33],
+      args: [head],
       mass: 2,
-      position: [props.position[0], props.position[1] + 0.9, props.position[2]],
+      position: [position[0], position[1] + torso.y / 2 + head, position[2]],
     }),
     undefined,
-    [props.position],
+    [position],
   );
 
-  // limbs (boxes)
-  const limbSize: [number, number, number] = [0.25, 0.8, 0.25];
-  const limbMass = 2.5;
-  const limbOffsets: Vector3[] = [
-    new Vector3(-0.5, 0.4, 0), // LH
-    new Vector3(0.5, 0.4, 0), // RH
-    new Vector3(-0.25, -0.9, 0), // LL
-    new Vector3(0.25, -0.9, 0), // RL
+  const limbOffsets = [
+    v(-0.45, 0.55, 0),
+    v(0.45, 0.55, 0),
+    v(-0.25, -0.6, 0),
+    v(0.25, -0.6, 0),
   ];
   const limbs = limbOffsets.map(
     (off) =>
       useBox(
         () => ({
-          args: limbSize,
-          mass: limbMass,
+          args: limb.toArray(),
+          mass: 2.5,
           position: [
-            props.position[0] + off.x,
-            props.position[1] + off.y,
-            props.position[2] + off.z,
+            position[0] + off.x,
+            position[1] + off.y,
+            position[2] + off.z,
           ],
         }),
         undefined,
-        [props.position],
+        [position],
       )[0],
   );
 
-  /* ── joints / constraints ─────────────────────────────────────── */
   const connect = (a: any, b: any, pivot: Vector3) =>
     usePointToPointConstraint(a, b, {
-      pivotA: [pivot.x, pivot.y, pivot.z],
+      pivotA: pivot.toArray(),
       pivotB: [0, 0, 0],
     });
+  connect(torsoRef, headRef, v(0, torso.y / 2, 0));
+  connect(torsoRef, limbs[0], v(-0.45, 0.3, 0));
+  connect(torsoRef, limbs[1], v(0.45, 0.3, 0));
+  connect(torsoRef, limbs[2], v(-0.25, -torso.y / 2, 0));
+  connect(torsoRef, limbs[3], v(0.25, -torso.y / 2, 0));
 
-  connect(torso, head, new Vector3(0, 0.6, 0)); // neck
-  connect(torso, limbs[0], new Vector3(-0.45, 0.55, 0)); // L-shoulder
-  connect(torso, limbs[1], new Vector3(0.45, 0.55, 0)); // R-shoulder
-  connect(torso, limbs[2], new Vector3(-0.25, -0.6, 0)); // L-hip
-  connect(torso, limbs[3], new Vector3(0.25, -0.6, 0)); // R-hip
-
-  /* ── imperative handle for death check ────────────────────────── */
+  /* imperative API */
+  const hp = useRef(maxHp);
   useImperativeHandle(
     ref,
-    () => ({
-      type,
-      get dead() {
-        const bodies = [torso, head, ...limbs].map((r) => r.current);
-        // consider a body “dead” once every rigid body fell below y = –4
-        return bodies.every((b) => b && b.position.y < -4);
+    (): RagdollHandle => ({
+      kind,
+      hp: () => hp.current,
+      dead: () => hp.current <= 0,
+      position: () => v(torsoRef.current!.position),
+      moveToward: (target, speed) => {
+        const dir = target.clone().sub(v(torsoRef.current!.position)).setY(0);
+        if (dir.lengthSq() > 1e-4)
+          setVelocity(torsoApi, dir.normalize(), speed);
+      },
+      takeDamage: (dmg) => {
+        hp.current = Math.max(0, hp.current - dmg);
       },
     }),
     [],
   );
 
-  /* ── visuals ──────────────────────────────────────────────────── */
-  const color = type === "Man" ? 0x3279ff : 0xaa2c2c;
+  /* visuals */
+  const color = cfg.color;
   return (
     <>
-      <mesh ref={torso} castShadow receiveShadow>
-        <boxGeometry args={[0.6, 1.2, 0.4]} />
+      <mesh ref={torsoRef} castShadow receiveShadow>
+        <boxGeometry args={torso.toArray()} />
         <meshStandardMaterial color={color} />
       </mesh>
-      <mesh ref={head} castShadow receiveShadow>
-        <sphereGeometry args={[0.33, 16, 16]} />
+      <mesh ref={headRef} castShadow receiveShadow>
+        <sphereGeometry args={[head, 16, 16]} />
         <meshStandardMaterial color={color} />
       </mesh>
-      {limbs.map((limbRef, idx) => (
-        <mesh key={idx} ref={limbRef} castShadow receiveShadow>
-          <boxGeometry args={limbSize} />
+      {limbs.map((lr, i) => (
+        <mesh key={i} ref={lr} castShadow receiveShadow>
+          <boxGeometry args={limb.toArray()} />
           <meshStandardMaterial color={color} />
         </mesh>
       ))}
@@ -118,10 +171,22 @@ function buildRagdoll(
   );
 }
 
-/* ————————  PUBLIC COMPONENTS  ———————— */
-export const ManRagdoll = forwardRef<RagdollHandle, RagdollProps>((p, ref) =>
-  buildRagdoll("Man", p, ref),
-);
-export const GorillaRagdoll = forwardRef<RagdollHandle, RagdollProps>(
-  (p, ref) => buildRagdoll("Gorilla", p, ref),
-);
+const ForwardInternal = forwardRef<RagdollHandle, BuildProps>(InternalRagdoll);
+
+/* ─────────────────────── public wrappers ────────────────────── */
+
+export const ManRagdoll = forwardRef<
+  RagdollHandle,
+  { position: [number, number, number] }
+>((props, ref) => (
+  <ForwardInternal position={props.position} kind="Man" ref={ref} />
+));
+
+export const GorillaRagdoll = forwardRef<
+  RagdollHandle,
+  { position: [number, number, number] }
+>((props, ref) => (
+  <ForwardInternal position={props.position} kind="Gorilla" ref={ref} />
+));
+
+export const UNIT_BALANCE = BALANCE;
